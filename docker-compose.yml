@@ -1,6 +1,6 @@
 services:
   network-dashboard:
-    image: ghcr.io/ydtoloza/network-dashboard:latest
+    build: .
     container_name: network-dashboard
     restart: unless-stopped
     network_mode: host

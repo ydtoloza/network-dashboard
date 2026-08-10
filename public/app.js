@@ -213,7 +213,9 @@ async function fetchHistory() {
                 </tr>`;
             
             days.forEach(d => {
-                const dateStr = `${d.date.year}-${String(d.date.month).padStart(2, '0')}-${String(d.date.day).padStart(2, '0')}`;
+                const monthsEs = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
+                const monthName = monthsEs[d.date.month - 1] || 'Ene';
+                const dateStr = `${monthName} ${d.date.day}, ${d.date.year}`;
                 table += `
                     <tr>
                         <td>${dateStr}</td>

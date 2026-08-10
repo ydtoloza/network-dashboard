@@ -32,6 +32,18 @@ header {
     margin-bottom: 40px;
 }
 
+.logo-container {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+}
+
+.main-logo {
+    height: 48px;
+    width: auto;
+    border-radius: 6px;
+}
+
 h1 {
     font-size: 2rem;
     font-weight: 500;
