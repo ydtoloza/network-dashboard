@@ -28,23 +28,32 @@ async function init() {
     const realtimeContainer = document.getElementById('realtime-container');
     const historyContainer = document.getElementById('history-container');
     
+    // SVG Icons
+    const waveIcon = `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>`;
+    const downloadIcon = `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>`;
+    const uploadIcon = `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>`;
+
     interfaces.forEach(iface => {
         // Build Real-time HTML
         const rtSection = document.createElement('div');
         rtSection.className = 'interface-section';
         rtSection.innerHTML = `
             <div class="interface-header-wrap">
-                <span class="status-dot"></span>
-                <h2 class="interface-header">${iface}</h2>
+                ${waveIcon}
+                <h2 class="interface-header">${iface} Overview</h2>
             </div>
             <div class="stats-grid">
                 <div class="stat-box">
-                    <div class="stat-label">Download Speed</div>
-                    <div class="stat-value rx" id="rx-speed-${iface}">0 B/s</div>
+                    <div class="stat-info">
+                        <div class="stat-label rx">${downloadIcon} Received</div>
+                        <div class="stat-value rx" id="rx-speed-${iface}">0 B/s</div>
+                    </div>
                 </div>
                 <div class="stat-box">
-                    <div class="stat-label">Upload Speed</div>
-                    <div class="stat-value tx" id="tx-speed-${iface}">0 B/s</div>
+                    <div class="stat-info">
+                        <div class="stat-label tx">${uploadIcon} Sent</div>
+                        <div class="stat-value tx" id="tx-speed-${iface}">0 B/s</div>
+                    </div>
                 </div>
             </div>
             <div class="chart-wrapper">
@@ -57,7 +66,10 @@ async function init() {
         const histSection = document.createElement('div');
         histSection.className = 'interface-section';
         histSection.innerHTML = `
-            <h2 class="interface-header">${iface}</h2>
+            <div class="interface-header-wrap">
+                ${waveIcon}
+                <h2 class="interface-header">${iface} History</h2>
+            </div>
             <div id="history-${iface}">Loading...</div>
         `;
         historyContainer.appendChild(histSection);
@@ -70,20 +82,20 @@ async function init() {
                 labels: Array(60).fill(''),
                 datasets: [
                     { 
-                        label: 'RX (Download)', 
+                        label: 'RX', 
                         data: Array(60).fill(0), 
-                        borderColor: '#4caf50', 
-                        backgroundColor: 'rgba(76, 175, 80, 0.1)',
+                        borderColor: '#3fb950', 
+                        backgroundColor: 'rgba(63, 185, 80, 0.15)',
                         fill: true,
                         tension: 0.4, 
                         pointRadius: 0, 
                         borderWidth: 2 
                     },
                     { 
-                        label: 'TX (Upload)', 
+                        label: 'TX', 
                         data: Array(60).fill(0), 
-                        borderColor: '#2196f3', 
-                        backgroundColor: 'rgba(33, 150, 243, 0.1)',
+                        borderColor: '#58a6ff', 
+                        backgroundColor: 'rgba(88, 166, 255, 0.15)',
                         fill: true,
                         tension: 0.4, 
                         pointRadius: 0, 
@@ -101,16 +113,16 @@ async function init() {
                 scales: {
                     y: { 
                         beginAtZero: true,
-                        grid: { color: '#333' },
+                        grid: { color: '#30363d' },
                         ticks: {
                             callback: function(value) { return formatBytes(value); },
-                            color: '#888'
+                            color: '#8b949e'
                         }
                     },
                     x: { display: false }
                 },
                 plugins: {
-                    legend: { display: true, position: 'top', labels: { color: '#e0e0e0', font: { family: 'monospace' } } },
+                    legend: { display: true, position: 'top', labels: { color: '#c9d1d9', font: { family: 'sans-serif', size: 12 } } },
                     tooltip: {
                         callbacks: {
                             label: function(context) { return context.dataset.label + ': ' + formatBytes(context.parsed.y) + '/s'; }
@@ -176,19 +188,29 @@ async function fetchHistory() {
         const res = await fetch('/api/history');
         const vnstatData = await res.json();
         
+        // Use the same icons
+        const downloadIcon = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>`;
+        const uploadIcon = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>`;
+        const waveIcon = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>`;
+
         interfaces.forEach(iface => {
             const historyDiv = document.getElementById(`history-${iface}`);
             const ifaceData = vnstatData.interfaces.find(i => i.name === iface);
             
             if (!ifaceData || !ifaceData.traffic || !ifaceData.traffic.day) {
-                historyDiv.innerHTML = "<p style='text-align:center; color:#888;'>No historical data yet.</p>";
+                historyDiv.innerHTML = "<p style='text-align:center; color:#888; padding: 20px;'>No historical data yet.</p>";
                 return;
             }
 
             const days = ifaceData.traffic.day.slice(-5).reverse(); // Last 5 days
             
             let table = `<table>
-                <tr><th>Date</th><th>RX</th><th>TX</th><th>Total</th></tr>`;
+                <tr>
+                    <th>Date</th>
+                    <th><div class="table-header-cell"><span class="rx">${downloadIcon}</span> Received</div></th>
+                    <th><div class="table-header-cell"><span class="tx">${uploadIcon}</span> Sent</div></th>
+                    <th><div class="table-header-cell"><span class="total">${waveIcon}</span> Total</div></th>
+                </tr>`;
             
             days.forEach(d => {
                 const dateStr = `${d.date.year}-${String(d.date.month).padStart(2, '0')}-${String(d.date.day).padStart(2, '0')}`;
@@ -197,7 +219,7 @@ async function fetchHistory() {
                         <td>${dateStr}</td>
                         <td class="rx">${formatBytes(d.rx)}</td>
                         <td class="tx">${formatBytes(d.tx)}</td>
-                        <td>${formatBytes(d.rx + d.tx)}</td>
+                        <td class="total font-bold">${formatBytes(d.rx + d.tx)}</td>
                     </tr>
                 `;
             });
