@@ -1,0 +1,132 @@
+:root {
+    --bg-color: #121212;
+    --surface-color: #1e1e1e;
+    --border-color: #333333;
+    --text-primary: #e0e0e0;
+    --text-secondary: #aaaaaa;
+    --rx-color: #4caf50;
+    --tx-color: #2196f3;
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background-color: var(--bg-color);
+    color: var(--text-primary);
+    line-height: 1.6;
+    padding: 20px;
+}
+
+header {
+    border-bottom: 2px solid var(--border-color);
+    padding-bottom: 20px;
+    margin-bottom: 30px;
+}
+
+h1 {
+    font-size: 1.8rem;
+    font-weight: 600;
+}
+
+.subtitle {
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+}
+
+.interface-section {
+    margin-bottom: 40px;
+    border: 1px solid var(--border-color);
+    padding: 20px;
+    background-color: var(--surface-color);
+}
+
+.interface-header {
+    font-size: 1.4rem;
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 10px;
+    margin-bottom: 20px;
+}
+
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 20px;
+    margin-bottom: 30px;
+}
+
+.stat-box {
+    border: 1px solid var(--border-color);
+    padding: 15px;
+    text-align: center;
+}
+
+.stat-label {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 5px;
+}
+
+.stat-value {
+    font-size: 1.5rem;
+    font-weight: bold;
+    font-family: monospace;
+}
+
+.rx { color: var(--rx-color); }
+.tx { color: var(--tx-color); }
+
+.charts-container {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+}
+
+.chart-wrapper {
+    border: 1px solid var(--border-color);
+    padding: 15px;
+}
+
+.chart-title {
+    font-size: 1rem;
+    color: var(--text-secondary);
+    margin-bottom: 10px;
+    text-align: center;
+}
+
+/* History table */
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 15px;
+    font-family: monospace;
+    font-size: 0.9rem;
+}
+
+th, td {
+    border: 1px solid var(--border-color);
+    padding: 8px;
+    text-align: right;
+}
+
+th {
+    background-color: #2a2a2a;
+    color: var(--text-secondary);
+    font-weight: normal;
+}
+
+td:first-child, th:first-child {
+    text-align: left;
+}
+
+@media (max-width: 768px) {
+    .charts-container {
+        grid-template-columns: 1fr;
+    }
+}

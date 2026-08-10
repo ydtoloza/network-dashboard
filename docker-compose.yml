@@ -1,0 +1,16 @@
+services:
+  network-dashboard:
+    image: ghcr.io/ydtoloza/network-dashboard:latest
+    container_name: network-dashboard
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      # Puerto donde quieres que escuche el servidor web
+      - PORT=8080
+      # Interfaces a monitorear separadas por coma
+      - INTERFACES=eth0,tailscale0
+      # Zona horaria
+      - TZ=America/Bogota
+    volumes:
+      # Guardar la base de datos de vnstat para que no se pierda el historial
+      - ./vnstat-data:/var/lib/vnstat
