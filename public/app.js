@@ -25,14 +25,18 @@ async function init() {
     const res = await fetch('/api/interfaces');
     interfaces = await res.json();
     
-    const dashboard = document.getElementById('dashboard');
+    const realtimeContainer = document.getElementById('realtime-container');
+    const historyContainer = document.getElementById('history-container');
     
     interfaces.forEach(iface => {
-        // Build HTML for each interface
-        const section = document.createElement('div');
-        section.className = 'interface-section';
-        section.innerHTML = `
-            <h2 class="interface-header">${iface}</h2>
+        // Build Real-time HTML
+        const rtSection = document.createElement('div');
+        rtSection.className = 'interface-section';
+        rtSection.innerHTML = `
+            <div class="interface-header-wrap">
+                <span class="status-dot"></span>
+                <h2 class="interface-header">${iface}</h2>
+            </div>
             <div class="stats-grid">
                 <div class="stat-box">
                     <div class="stat-label">Download Speed</div>
@@ -43,46 +47,75 @@ async function init() {
                     <div class="stat-value tx" id="tx-speed-${iface}">0 B/s</div>
                 </div>
             </div>
-            <div class="charts-container">
-                <div class="chart-wrapper">
-                    <div class="chart-title">Real-time Traffic</div>
-                    <canvas id="live-chart-${iface}"></canvas>
-                </div>
-                <div class="chart-wrapper">
-                    <div class="chart-title">History (Last 30 Days)</div>
-                    <div id="history-${iface}">Loading...</div>
-                </div>
+            <div class="chart-wrapper">
+                <canvas id="live-chart-${iface}"></canvas>
             </div>
         `;
-        dashboard.appendChild(section);
+        realtimeContainer.appendChild(rtSection);
 
-        // Init Chart
+        // Build History HTML
+        const histSection = document.createElement('div');
+        histSection.className = 'interface-section';
+        histSection.innerHTML = `
+            <h2 class="interface-header">${iface}</h2>
+            <div id="history-${iface}">Loading...</div>
+        `;
+        historyContainer.appendChild(histSection);
+
+        // Init Chart with better visuals
         const ctx = document.getElementById(`live-chart-${iface}`).getContext('2d');
         charts[iface] = new Chart(ctx, {
             type: 'line',
             data: {
                 labels: Array(60).fill(''),
                 datasets: [
-                    { label: 'RX', data: Array(60).fill(0), borderColor: '#4caf50', tension: 0, pointRadius: 0, borderWidth: 2 },
-                    { label: 'TX', data: Array(60).fill(0), borderColor: '#2196f3', tension: 0, pointRadius: 0, borderWidth: 2 }
+                    { 
+                        label: 'RX (Download)', 
+                        data: Array(60).fill(0), 
+                        borderColor: '#4caf50', 
+                        backgroundColor: 'rgba(76, 175, 80, 0.1)',
+                        fill: true,
+                        tension: 0.4, 
+                        pointRadius: 0, 
+                        borderWidth: 2 
+                    },
+                    { 
+                        label: 'TX (Upload)', 
+                        data: Array(60).fill(0), 
+                        borderColor: '#2196f3', 
+                        backgroundColor: 'rgba(33, 150, 243, 0.1)',
+                        fill: true,
+                        tension: 0.4, 
+                        pointRadius: 0, 
+                        borderWidth: 2 
+                    }
                 ]
             },
             options: {
                 responsive: true,
                 animation: false,
+                interaction: {
+                    intersect: false,
+                    mode: 'index',
+                },
                 scales: {
                     y: { 
                         beginAtZero: true,
+                        grid: { color: '#333' },
                         ticks: {
-                            callback: function(value) {
-                                return formatBytes(value);
-                            }
+                            callback: function(value) { return formatBytes(value); },
+                            color: '#888'
                         }
                     },
                     x: { display: false }
                 },
                 plugins: {
-                    legend: { display: true, position: 'top', labels: { color: '#aaa' } }
+                    legend: { display: true, position: 'top', labels: { color: '#e0e0e0', font: { family: 'monospace' } } },
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) { return context.dataset.label + ': ' + formatBytes(context.parsed.y) + '/s'; }
+                        }
+                    }
                 }
             }
         });
