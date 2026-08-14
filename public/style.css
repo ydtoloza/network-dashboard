@@ -104,6 +104,98 @@ h1 svg {
     font-weight: 600;
 }
 
+/* Status indicator */
+.status-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    display: inline-block;
+    background: var(--text-secondary);
+    margin-left: auto;
+    flex-shrink: 0;
+}
+
+.status-dot.up {
+    background: var(--rx-color);
+    box-shadow: 0 0 6px var(--rx-color);
+}
+
+.status-dot.down {
+    background: #f85149;
+    box-shadow: 0 0 6px #f85149;
+}
+
+.status-text {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    flex-shrink: 0;
+}
+
+/* Alert state */
+.interface-section.alert {
+    border-color: #f85149;
+    box-shadow: 0 0 12px rgba(248, 81, 73, 0.35);
+}
+
+.interface-section.alert .interface-header {
+    color: #f85149;
+}
+
+/* Summary cards */
+.summary-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 20px;
+    margin-bottom: 10px;
+}
+
+.summary-box {
+    border: 1px solid var(--border-color);
+    background-color: var(--surface-color);
+    padding: 18px 20px;
+    border-radius: var(--border-radius);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.summary-value {
+    font-size: 1.8rem;
+    font-weight: bold;
+    line-height: 1.2;
+}
+
+/* Range tabs */
+.range-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 20px;
+}
+
+.tab-btn {
+    background: var(--surface-color);
+    color: var(--text-secondary);
+    border: 1px solid var(--border-color);
+    padding: 8px 16px;
+    border-radius: var(--border-radius);
+    cursor: pointer;
+    font-size: 0.9rem;
+    transition: all 0.15s ease;
+}
+
+.tab-btn:hover {
+    color: var(--text-primary);
+    border-color: #484f58;
+}
+
+.tab-btn.active {
+    background: var(--rx-color);
+    border-color: var(--rx-color);
+    color: #0d1117;
+    font-weight: 600;
+}
+
 .stats-grid {
     display: flex;
     gap: 15px;

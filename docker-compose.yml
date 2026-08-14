@@ -11,6 +11,20 @@ services:
       - INTERFACES=eth0,tailscale0
       # Zona horaria
       - TZ=America/Bogota
+      # Intervalo de muestreo del backend en milisegundos (default: 1000)
+      # - POLL_INTERVAL_MS=1000
+      # Umbral de alerta: resalta una interfaz si la velocidad combinada lo supera
+      # Acepta bytes o sufijos: 1048576, 1M, 500K, 1.5G (default: desactivado)
+      # - ALERT_THRESHOLD=1M
+      # Autenticación básica opcional para el dashboard (requiere ambos)
+      # - AUTH_USER=admin
+      # - AUTH_PASS=cambia-esta-password
     volumes:
       # Guardar la base de datos de vnstat para que no se pierda el historial
       - ./vnstat-data:/var/lib/vnstat
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

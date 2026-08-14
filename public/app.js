@@ -1,7 +1,21 @@
-const POLL_INTERVAL = 1000;
-let interfaces = [];
+const ICONS = {
+    wave: `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>`,
+    download: `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>`,
+    upload: `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>`
+};
+
+const HISTORY_RANGES = [
+    { key: 'today', label: 'Hoy (24h)' },
+    { key: '5d', label: '5 días' },
+    { key: '7d', label: '7 días' },
+    { key: '30d', label: '30 días' },
+    { key: 'month', label: 'Mensual' }
+];
+
+let config = { interfaces: [], poll_interval_ms: 1000, alert_threshold: 0, history_size: 60 };
 let charts = {};
-let lastData = {};
+let currentRange = '5d';
+let pollCount = 0;
 
 function formatBytes(bytes, decimals = 2) {
     if (!+bytes) return '0 B';
@@ -12,229 +26,312 @@ function formatBytes(bytes, decimals = 2) {
     return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`;
 }
 
-function formatSpeed(bytes, prevBytes, dt) {
-    if (prevBytes === undefined || dt === 0) return '0 B/s';
-    const diff = bytes - prevBytes;
-    if (diff < 0) return '0 B/s'; // Counter reset
-    const bps = (diff / dt) * 1000;
+function formatSpeed(bps) {
     return formatBytes(bps) + '/s';
 }
 
+function historyKey(iface) {
+    return 'nd-history-' + iface;
+}
+
+function loadHistoryFromStorage(iface) {
+    try {
+        const raw = localStorage.getItem(historyKey(iface));
+        const arr = JSON.parse(raw);
+        return Array.isArray(arr) ? arr : [];
+    } catch (e) {
+        return [];
+    }
+}
+
+function saveHistoryToStorage(iface, samples) {
+    try {
+        localStorage.setItem(historyKey(iface), JSON.stringify(samples.slice(-config.history_size)));
+    } catch (e) { /* storage full or unavailable */ }
+}
+
 async function init() {
-    // Get interfaces
-    const res = await fetch('/api/interfaces');
-    interfaces = await res.json();
-    
+    const res = await fetch('/api/config');
+    config = await res.json();
+
+    buildSummarySection();
+    config.interfaces.forEach(iface => buildInterfaceSections(iface));
+    buildRangeTabs();
+
+    pollRealtime();
+    loadHistory(currentRange);
+    refreshSummary();
+    registerSW();
+}
+
+function buildSummarySection() {
+    const container = document.getElementById('summary-container');
+    const cards = [
+        { id: 'sum-rx-speed', label: 'Descarga ahora', icon: ICONS.download, cls: 'rx', value: '0 B/s' },
+        { id: 'sum-tx-speed', label: 'Subida ahora', icon: ICONS.upload, cls: 'tx', value: '0 B/s' },
+        { id: 'sum-rx-today', label: 'Descargado hoy', icon: ICONS.download, cls: 'rx', value: '0 B' },
+        { id: 'sum-tx-today', label: 'Subido hoy', icon: ICONS.upload, cls: 'tx', value: '0 B' }
+    ];
+    cards.forEach(card => {
+        const box = document.createElement('div');
+        box.className = 'summary-box';
+        box.innerHTML = `
+            <div class="stat-label">${card.icon} ${card.label}</div>
+            <div class="summary-value ${card.cls}" id="${card.id}">${card.value}</div>
+        `;
+        container.appendChild(box);
+    });
+}
+
+function buildInterfaceSections(iface) {
     const realtimeContainer = document.getElementById('realtime-container');
     const historyContainer = document.getElementById('history-container');
-    
-    // SVG Icons
-    const waveIcon = `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>`;
-    const downloadIcon = `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>`;
-    const uploadIcon = `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>`;
 
-    interfaces.forEach(iface => {
-        // Build Real-time HTML
-        const rtSection = document.createElement('div');
-        rtSection.className = 'interface-section';
-        rtSection.innerHTML = `
-            <div class="interface-header-wrap">
-                ${waveIcon}
-                <h2 class="interface-header">${iface} Overview</h2>
-            </div>
-            <div class="stats-grid">
-                <div class="stat-box">
-                    <div class="stat-info">
-                        <div class="stat-label rx">${downloadIcon} Received</div>
-                        <div class="stat-value rx" id="rx-speed-${iface}">0 B/s</div>
-                    </div>
-                </div>
-                <div class="stat-box">
-                    <div class="stat-info">
-                        <div class="stat-label tx">${uploadIcon} Sent</div>
-                        <div class="stat-value tx" id="tx-speed-${iface}">0 B/s</div>
-                    </div>
+    const rtSection = document.createElement('div');
+    rtSection.className = 'interface-section';
+    rtSection.id = `section-${iface}`;
+    rtSection.innerHTML = `
+        <div class="interface-header-wrap">
+            ${ICONS.wave}
+            <h2 class="interface-header">${iface}</h2>
+            <span class="status-dot" id="status-${iface}" title="Estado desconocido"></span>
+            <span class="status-text" id="status-text-${iface}"></span>
+        </div>
+        <div class="stats-grid">
+            <div class="stat-box">
+                <div class="stat-info">
+                    <div class="stat-label rx">${ICONS.download} Received</div>
+                    <div class="stat-value rx" id="rx-speed-${iface}">0 B/s</div>
                 </div>
             </div>
-            <div class="chart-wrapper">
-                <canvas id="live-chart-${iface}"></canvas>
+            <div class="stat-box">
+                <div class="stat-info">
+                    <div class="stat-label tx">${ICONS.upload} Sent</div>
+                    <div class="stat-value tx" id="tx-speed-${iface}">0 B/s</div>
+                </div>
             </div>
-        `;
-        realtimeContainer.appendChild(rtSection);
+        </div>
+        <div class="chart-wrapper">
+            <canvas id="live-chart-${iface}"></canvas>
+        </div>
+    `;
+    realtimeContainer.appendChild(rtSection);
 
-        // Build History HTML
-        const histSection = document.createElement('div');
-        histSection.className = 'interface-section';
-        histSection.innerHTML = `
-            <div class="interface-header-wrap">
-                ${waveIcon}
-                <h2 class="interface-header">${iface} History</h2>
-            </div>
-            <div id="history-${iface}">Loading...</div>
-        `;
-        historyContainer.appendChild(histSection);
+    const histSection = document.createElement('div');
+    histSection.className = 'interface-section';
+    histSection.innerHTML = `
+        <div class="interface-header-wrap">
+            ${ICONS.wave}
+            <h2 class="interface-header">${iface} History</h2>
+        </div>
+        <div id="history-${iface}">Cargando...</div>
+    `;
+    historyContainer.appendChild(histSection);
 
-        // Init Chart with better visuals
-        const ctx = document.getElementById(`live-chart-${iface}`).getContext('2d');
-        charts[iface] = new Chart(ctx, {
-            type: 'line',
-            data: {
-                labels: Array(60).fill(''),
-                datasets: [
-                    { 
-                        label: 'RX', 
-                        data: Array(60).fill(0), 
-                        borderColor: '#3fb950', 
-                        backgroundColor: 'rgba(63, 185, 80, 0.15)',
-                        fill: true,
-                        tension: 0.4, 
-                        pointRadius: 0, 
-                        borderWidth: 2 
-                    },
-                    { 
-                        label: 'TX', 
-                        data: Array(60).fill(0), 
-                        borderColor: '#58a6ff', 
-                        backgroundColor: 'rgba(88, 166, 255, 0.15)',
-                        fill: true,
-                        tension: 0.4, 
-                        pointRadius: 0, 
-                        borderWidth: 2 
+    const saved = loadHistoryFromStorage(iface);
+    const labels = Array(Math.max(saved.length, 1)).fill('');
+    const rxData = saved.length ? saved.map(s => s.rx) : [0];
+    const txData = saved.length ? saved.map(s => s.tx) : [0];
+
+    const ctx = document.getElementById(`live-chart-${iface}`).getContext('2d');
+    charts[iface] = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: labels,
+            datasets: [
+                {
+                    label: 'RX',
+                    data: rxData,
+                    borderColor: '#3fb950',
+                    backgroundColor: 'rgba(63, 185, 80, 0.15)',
+                    fill: true,
+                    tension: 0.4,
+                    pointRadius: 0,
+                    borderWidth: 2
+                },
+                {
+                    label: 'TX',
+                    data: txData,
+                    borderColor: '#58a6ff',
+                    backgroundColor: 'rgba(88, 166, 255, 0.15)',
+                    fill: true,
+                    tension: 0.4,
+                    pointRadius: 0,
+                    borderWidth: 2
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            animation: false,
+            interaction: { intersect: false, mode: 'index' },
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    grid: { color: '#30363d' },
+                    ticks: {
+                        callback: function (value) { return formatBytes(value); },
+                        color: '#8b949e'
                     }
-                ]
+                },
+                x: { display: false }
             },
-            options: {
-                responsive: true,
-                animation: false,
-                interaction: {
-                    intersect: false,
-                    mode: 'index',
-                },
-                scales: {
-                    y: { 
-                        beginAtZero: true,
-                        grid: { color: '#30363d' },
-                        ticks: {
-                            callback: function(value) { return formatBytes(value); },
-                            color: '#8b949e'
-                        }
-                    },
-                    x: { display: false }
-                },
-                plugins: {
-                    legend: { display: true, position: 'top', labels: { color: '#c9d1d9', font: { family: 'sans-serif', size: 12 } } },
-                    tooltip: {
-                        callbacks: {
-                            label: function(context) { return context.dataset.label + ': ' + formatBytes(context.parsed.y) + '/s'; }
-                        }
+            plugins: {
+                legend: { display: true, position: 'top', labels: { color: '#c9d1d9', font: { family: 'sans-serif', size: 12 } } },
+                tooltip: {
+                    callbacks: {
+                        label: function (context) { return context.dataset.label + ': ' + formatBytes(context.parsed.y) + '/s'; }
                     }
                 }
             }
-        });
+        }
     });
+}
 
-    // Start polling
-    pollRealtime();
-    fetchHistory();
+function buildRangeTabs() {
+    const container = document.getElementById('range-tabs');
+    HISTORY_RANGES.forEach(rng => {
+        const btn = document.createElement('button');
+        btn.className = 'tab-btn' + (rng.key === currentRange ? ' active' : '');
+        btn.textContent = rng.label;
+        btn.dataset.range = rng.key;
+        btn.addEventListener('click', () => {
+            currentRange = rng.key;
+            container.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            loadHistory(currentRange);
+        });
+        container.appendChild(btn);
+    });
 }
 
 async function pollRealtime() {
     try {
+        pollCount++;
         const res = await fetch('/api/realtime');
         const data = await res.json();
-        const now = Date.now();
 
-        interfaces.forEach(iface => {
-            if (data[iface]) {
-                const current = data[iface];
-                const prev = lastData[iface];
-                
-                let rxSpeedBytes = 0;
-                let txSpeedBytes = 0;
+        let totalRxSpeed = 0, totalTxSpeed = 0;
+        const shouldPersist = pollCount % 10 === 0;
 
-                if (prev) {
-                    const dt = current.timestamp - prev.timestamp;
-                    if (dt > 0) {
-                        const rxDiff = current.rx_bytes - prev.rx_bytes;
-                        const txDiff = current.tx_bytes - prev.tx_bytes;
-                        if (rxDiff >= 0) rxSpeedBytes = (rxDiff / dt) * 1000;
-                        if (txDiff >= 0) txSpeedBytes = (txDiff / dt) * 1000;
-                    }
-                }
+        data.interfaces.forEach(st => {
+            const iface = st.name;
 
-                document.getElementById(`rx-speed-${iface}`).innerText = formatBytes(rxSpeedBytes) + '/s';
-                document.getElementById(`tx-speed-${iface}`).innerText = formatBytes(txSpeedBytes) + '/s';
+            document.getElementById(`rx-speed-${iface}`).innerText = formatSpeed(st.rx_speed);
+            document.getElementById(`tx-speed-${iface}`).innerText = formatSpeed(st.tx_speed);
 
-                // Update chart
-                const chart = charts[iface];
-                chart.data.datasets[0].data.shift();
-                chart.data.datasets[0].data.push(rxSpeedBytes);
-                chart.data.datasets[1].data.shift();
-                chart.data.datasets[1].data.push(txSpeedBytes);
-                chart.update();
-
-                lastData[iface] = current;
+            const dot = document.getElementById(`status-${iface}`);
+            const statusText = document.getElementById(`status-text-${iface}`);
+            if (st.up) {
+                dot.classList.add('up');
+                dot.classList.remove('down');
+                statusText.textContent = 'Online';
+                statusText.style.color = '#3fb950';
+            } else {
+                dot.classList.add('down');
+                dot.classList.remove('up');
+                statusText.textContent = st.operstate || 'Offline';
+                statusText.style.color = '#f85149';
             }
+
+            const section = document.getElementById(`section-${iface}`);
+            const active = config.alert_threshold > 0 && (st.rx_speed + st.tx_speed) > config.alert_threshold;
+            section.classList.toggle('alert', active);
+
+            const chart = charts[iface];
+            const samples = (data.history && data.history[iface]) || [];
+            if (samples.length) {
+                chart.data.labels = samples.map(() => '');
+                chart.data.datasets[0].data = samples.map(s => s.rx);
+                chart.data.datasets[1].data = samples.map(s => s.tx);
+                chart.update();
+                if (shouldPersist) {
+                    saveHistoryToStorage(iface, samples);
+                }
+            }
+
+            totalRxSpeed += st.rx_speed;
+            totalTxSpeed += st.tx_speed;
         });
+
+        document.getElementById('sum-rx-speed').innerText = formatSpeed(totalRxSpeed);
+        document.getElementById('sum-tx-speed').innerText = formatSpeed(totalTxSpeed);
     } catch (e) {
         console.error("Poll error", e);
     }
-    
-    setTimeout(pollRealtime, POLL_INTERVAL);
+
+    setTimeout(pollRealtime, config.poll_interval_ms || 1000);
 }
 
-async function fetchHistory() {
-    try {
-        const res = await fetch('/api/history');
-        const vnstatData = await res.json();
-        
-        // Use the same icons
-        const downloadIcon = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>`;
-        const uploadIcon = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>`;
-        const waveIcon = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>`;
+function formatDateLabel(label) {
+    if (currentRange === 'today') return label;
+    const monthsEs = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
+    const parts = label.split('-');
+    if (parts.length < 3) return label;
+    const monthName = monthsEs[parseInt(parts[1], 10) - 1] || parts[1];
+    return `${monthName} ${parseInt(parts[2], 10)}, ${parts[0]}`;
+}
 
-        interfaces.forEach(iface => {
-            const historyDiv = document.getElementById(`history-${iface}`);
-            const ifaceData = vnstatData.interfaces.find(i => i.name === iface);
-            
-            if (!ifaceData || !ifaceData.traffic || !ifaceData.traffic.day) {
+async function loadHistory(range) {
+    try {
+        const res = await fetch('/api/history?range=' + encodeURIComponent(range));
+        const data = await res.json();
+
+        data.interfaces.forEach(ifaceData => {
+            const historyDiv = document.getElementById(`history-${ifaceData.name}`);
+            if (!historyDiv) return;
+
+            const entries = [...ifaceData.entries].sort((a, b) => (b.rx + b.tx) - (a.rx + a.tx));
+
+            if (!entries.length) {
                 historyDiv.innerHTML = "<p style='text-align:center; color:#888; padding: 20px;'>No historical data yet.</p>";
                 return;
             }
 
-            const days = ifaceData.traffic.day.slice(-5).reverse(); // Last 5 days
-            
             let table = `<table>
                 <tr>
-                    <th>Date</th>
-                    <th><div class="table-header-cell"><span class="rx">${downloadIcon}</span> Received</div></th>
-                    <th><div class="table-header-cell"><span class="tx">${uploadIcon}</span> Sent</div></th>
-                    <th><div class="table-header-cell"><span class="total">${waveIcon}</span> Total</div></th>
+                    <th><div class="table-header-cell"><span class="rx">${ICONS.download}</span> Fecha</div></th>
+                    <th><div class="table-header-cell"><span class="rx">${ICONS.download}</span> Received</div></th>
+                    <th><div class="table-header-cell"><span class="tx">${ICONS.upload}</span> Sent</div></th>
+                    <th><div class="table-header-cell"><span class="total">${ICONS.wave}</span> Total</div></th>
                 </tr>`;
-            
-            days.forEach(d => {
-                const monthsEs = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
-                const monthName = monthsEs[d.date.month - 1] || 'Ene';
-                const dateStr = `${monthName} ${d.date.day}, ${d.date.year}`;
+
+            entries.forEach(e => {
                 table += `
                     <tr>
-                        <td>${dateStr}</td>
-                        <td class="rx">${formatBytes(d.rx)}</td>
-                        <td class="tx">${formatBytes(d.tx)}</td>
-                        <td class="total font-bold">${formatBytes(d.rx + d.tx)}</td>
+                        <td>${formatDateLabel(e.label)}</td>
+                        <td class="rx">${formatBytes(e.rx)}</td>
+                        <td class="tx">${formatBytes(e.tx)}</td>
+                        <td class="total font-bold">${formatBytes(e.rx + e.tx)}</td>
                     </tr>
                 `;
             });
             table += `</table>`;
-            
             historyDiv.innerHTML = table;
         });
     } catch (e) {
         console.error("History fetch error", e);
     }
-    
-    // Refresh history every 5 minutes
-    setTimeout(fetchHistory, 5 * 60 * 1000);
+}
+
+async function refreshSummary() {
+    try {
+        const res = await fetch('/api/summary');
+        const data = await res.json();
+        document.getElementById('sum-rx-today').innerText = formatBytes(data.total_rx_today);
+        document.getElementById('sum-tx-today').innerText = formatBytes(data.total_tx_today);
+    } catch (e) {
+        console.error("Summary fetch error", e);
+    }
+    setTimeout(refreshSummary, 5 * 60 * 1000);
+}
+
+function registerSW() {
+    if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('./sw.js').catch(e => {
+            console.warn('Service worker registration failed:', e);
+        });
+    }
 }
 
 window.onload = init;
