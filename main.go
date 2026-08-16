@@ -450,7 +450,7 @@ const (
 	speedtestDownloadURL    = "https://speed.cloudflare.com/__down"
 	speedtestUploadURL      = "https://speed.cloudflare.com/__up"
 	speedtestChunkSize      = 256 * 1024
-	speedtestChunkBytes     = 25 * 1024 * 1024
+	speedtestChunkBytes     = int64(25 * 1024 * 1024)
 	speedtestUploadBlockLen = 4 * 1024 * 1024
 )
 
