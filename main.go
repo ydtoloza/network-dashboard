@@ -441,7 +441,7 @@ func todayTotals(data *vnstatRoot, name string, now time.Time) (rx, tx uint64, f
 // Speed test
 
 const (
-	speedtestDefaultMB      = 200
+	speedtestDefaultMB      = 512
 	speedtestMinMB          = 1
 	speedtestMaxMB          = 512
 	speedtestPhase          = 5 * time.Second
@@ -450,6 +450,7 @@ const (
 	speedtestDownloadURL    = "https://speed.cloudflare.com/__down"
 	speedtestUploadURL      = "https://speed.cloudflare.com/__up"
 	speedtestChunkSize      = 256 * 1024
+	speedtestChunkBytes     = 25 * 1024 * 1024
 	speedtestUploadBlockLen = 4 * 1024 * 1024
 )
 
@@ -506,39 +507,41 @@ func speedtestPing(ctx context.Context) int64 {
 	return time.Since(start).Milliseconds()
 }
 
-// speedtestDownload receives up to maxBytes from Cloudflare for ~speedtestPhase
-// and returns the bytes actually received and the elapsed time in ms. On a
-// timeout it returns the partial transfer instead of failing.
+// speedtestDownload downloads data from Cloudflare in chunks until
+// ~speedtestPhase has elapsed or maxBytes have been received, and returns the
+// bytes actually received and the elapsed time in ms. Chunks stay below the
+// endpoint's per-request limit (Cloudflare rejects __down requests over ~95 MB
+// with 403 Forbidden). On a timeout it returns the partial transfer instead of
+// failing.
 func speedtestDownload(ctx context.Context, maxBytes int64) (int64, int64, error) {
-	url := fmt.Sprintf("%s?bytes=%d", speedtestDownloadURL, maxBytes)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return 0, 0, err
-	}
 	start := time.Now()
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return 0, 0, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return 0, 0, fmt.Errorf("download endpoint returned %s", resp.Status)
-	}
 	deadline := time.Now().Add(speedtestPhase)
 	buf := make([]byte, speedtestChunkSize)
 	var total int64
 	for {
-		if time.Now().After(deadline) {
+		if time.Now().After(deadline) || total >= maxBytes {
 			break
 		}
-		n, err := resp.Body.Read(buf)
-		total += int64(n)
-		if err == io.EOF {
-			break
+		want := speedtestChunkBytes
+		if rem := maxBytes - total; rem < want {
+			want = rem
 		}
+		url := fmt.Sprintf("%s?bytes=%d", speedtestDownloadURL, want)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 		if err != nil {
 			return total, time.Since(start).Milliseconds(), err
 		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return total, time.Since(start).Milliseconds(), err
+		}
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			return total, time.Since(start).Milliseconds(), fmt.Errorf("download endpoint returned %s", resp.Status)
+		}
+		n, _ := io.CopyBuffer(io.Discard, resp.Body, buf)
+		total += n
+		resp.Body.Close()
 	}
 	return total, time.Since(start).Milliseconds(), nil
 }
