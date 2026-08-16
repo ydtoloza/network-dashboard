@@ -928,7 +928,7 @@ func main() {
 		Addr:         ":" + cfg.Port,
 		Handler:      (&apiServer{cfg: cfg, monitor: monitor}).routes(),
 		ReadTimeout:  5 * time.Second,
-		WriteTimeout: 10 * time.Second,
+		WriteTimeout: 60 * time.Second, // speed test can run ~20s
 		IdleTimeout:  60 * time.Second,
 	}
 
