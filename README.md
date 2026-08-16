@@ -23,7 +23,7 @@ A lightweight real-time network dashboard using vnStat and Go.
 | `/api/realtime` | Live counters, server-computed speeds and rolling history per interface |
 | `/api/history?range=24h\|5d\|7d\|30d\|month` | vnStat history for the requested range |
 | `/api/summary` | Today's totals and current speeds per interface |
-| `/api/speedtest?mb=512` | On-demand speed test: downloads/uploads up to `mb` MB total per phase (~5 s each) against Cloudflare, returning `ping_ms`, `download`/`upload` `bps`. Returns `409` while another test runs |
+| `/api/speedtest?mb=512` | On-demand speed test: downloads/uploads up to `mb` MB total per phase (~5 s each) using the fastest healthy public test server (OVH, Cloudflare, Cachefly; Cloudflare is throttled for many datacenter IPs, so it probes several). Returns `ping_ms`, `download`/`upload` `bps`. Returns `409` while another test runs |
 | `/api/interfaces` | List of monitored interfaces (alias) |
 
 ## Environment variables

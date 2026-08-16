@@ -441,18 +441,40 @@ func todayTotals(data *vnstatRoot, name string, now time.Time) (rx, tx uint64, f
 // Speed test
 
 const (
-	speedtestDefaultMB      = 512
-	speedtestMinMB          = 1
-	speedtestMaxMB          = 512
-	speedtestPhase          = 5 * time.Second
-	speedtestPhaseTimeout   = 45 * time.Second
-	speedtestPingTimeout    = 5 * time.Second
-	speedtestDownloadURL    = "https://speed.cloudflare.com/__down"
-	speedtestUploadURL      = "https://speed.cloudflare.com/__up"
-	speedtestChunkSize      = 256 * 1024
-	speedtestChunkBytes     = int64(25 * 1024 * 1024)
-	speedtestUploadBlockLen = 4 * 1024 * 1024
+	speedtestDefaultMB       = 512
+	speedtestMinMB           = 1
+	speedtestMaxMB           = 512
+	speedtestPhase           = 5 * time.Second
+	speedtestProbe           = 2 * time.Second
+	speedtestPhaseTimeout    = 45 * time.Second
+	speedtestPingTimeout     = 5 * time.Second
+	speedtestChunkSize       = 256 * 1024
+	speedtestChunkBytes      = int64(25 * 1024 * 1024)
+	speedtestUploadBlockLen  = 4 * 1024 * 1024
+	speedtestMinGoodTransfer = int64(1024 * 1024)
 )
+
+// dlTarget is one download source for the speed test. Static files are read
+// over a single connection; Cloudflare-style endpoints need chunked requests
+// because __down rejects requests over ~95 MB with 403 Forbidden, and public
+// speed-test endpoints often throttle datacenter IPs, so the fastest healthy
+// target is picked.
+type dlTarget struct {
+	name    string
+	url     string
+	chunked bool
+}
+
+var speedtestDownloadTargets = []dlTarget{
+	{name: "ovh", url: "https://proof.ovh.net/files/10Gb.dat"},
+	{name: "cloudflare", url: "https://speed.cloudflare.com/__down", chunked: true},
+	{name: "cachefly", url: "https://cachefly.cachefly.net/100mb.test"},
+}
+
+var speedtestUploadTargets = []string{
+	"https://speed.cloudflare.com/__up",
+	"https://speed.hetzner.de/upload.php",
+}
 
 type speedtestPart struct {
 	Bps   float64 `json:"bps"` // bytes/sec
@@ -491,9 +513,9 @@ func speedFromTransfer(bytes int64, ms int64) float64 {
 	return float64(bytes) * 1000 / float64(ms)
 }
 
-// speedtestPing measures the round-trip latency to the download endpoint.
+// speedtestPing measures the round-trip latency to the Cloudflare endpoint.
 func speedtestPing(ctx context.Context) int64 {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, speedtestDownloadURL+"?bytes=0", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://speed.cloudflare.com/__down?bytes=0", nil)
 	if err != nil {
 		return -1
 	}
@@ -507,15 +529,40 @@ func speedtestPing(ctx context.Context) int64 {
 	return time.Since(start).Milliseconds()
 }
 
-// speedtestDownload downloads data from Cloudflare in chunks until
-// ~speedtestPhase has elapsed or maxBytes have been received, and returns the
-// bytes actually received and the elapsed time in ms. Chunks stay below the
-// endpoint's per-request limit (Cloudflare rejects __down requests over ~95 MB
-// with 403 Forbidden). On a timeout it returns the partial transfer instead of
-// failing.
-func speedtestDownload(ctx context.Context, maxBytes int64) (int64, int64, error) {
+// measureDownload streams from a single target for at most dur and returns the
+// bytes actually received and the elapsed time in ms. On a timeout or a
+// throttled connection it returns the partial transfer instead of failing.
+func measureDownload(ctx context.Context, t dlTarget, maxBytes int64, dur time.Duration) (int64, int64, error) {
+	if t.chunked {
+		return downloadChunked(ctx, maxBytes, dur)
+	}
+	return downloadStatic(ctx, t.url, maxBytes, dur)
+}
+
+// downloadStatic reads one response body until dur elapses or maxBytes bytes
+// have been received.
+func downloadStatic(ctx context.Context, url string, maxBytes int64, dur time.Duration) (int64, int64, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return 0, 0, err
+	}
 	start := time.Now()
-	deadline := time.Now().Add(speedtestPhase)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return 0, time.Since(start).Milliseconds(), fmt.Errorf("%s returned %s", url, resp.Status)
+	}
+	return readBody(resp.Body, maxBytes, dur, start)
+}
+
+// downloadChunked requests 25 MB chunks in a loop (below Cloudflare's
+// per-request limit) until dur elapses or maxBytes bytes have been received.
+func downloadChunked(ctx context.Context, maxBytes int64, dur time.Duration) (int64, int64, error) {
+	start := time.Now()
+	deadline := time.Now().Add(dur)
 	buf := make([]byte, speedtestChunkSize)
 	var total int64
 	for {
@@ -526,7 +573,7 @@ func speedtestDownload(ctx context.Context, maxBytes int64) (int64, int64, error
 		if rem := maxBytes - total; rem < want {
 			want = rem
 		}
-		url := fmt.Sprintf("%s?bytes=%d", speedtestDownloadURL, want)
+		url := fmt.Sprintf("https://speed.cloudflare.com/__down?bytes=%d", want)
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 		if err != nil {
 			return total, time.Since(start).Milliseconds(), err
@@ -546,9 +593,49 @@ func speedtestDownload(ctx context.Context, maxBytes int64) (int64, int64, error
 	return total, time.Since(start).Milliseconds(), nil
 }
 
-// speedtestUpload sends up to maxBytes of pseudo-random data to Cloudflare for
+// readBody copies r to io.Discard until dur elapses, maxBytes bytes are read,
+// or EOF, and reports the bytes read and the elapsed time since start.
+func readBody(r io.Reader, maxBytes int64, dur time.Duration, start time.Time) (int64, int64, error) {
+	deadline := time.Now().Add(dur)
+	buf := make([]byte, speedtestChunkSize)
+	var total int64
+	for {
+		if time.Now().After(deadline) || total >= maxBytes {
+			break
+		}
+		n, err := r.Read(buf)
+		total += int64(n)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return total, time.Since(start).Milliseconds(), err
+		}
+	}
+	return total, time.Since(start).Milliseconds(), nil
+}
+
+// runSpeedtestDownload probes every target briefly, picks the fastest healthy
+// one (public endpoints often throttle datacenter IPs) and measures it for a
+// full speedtestPhase.
+func runSpeedtestDownload(ctx context.Context, maxBytes int64) (int64, int64, error) {
+	var best dlTarget
+	var bestBytes int64
+	for _, t := range speedtestDownloadTargets {
+		b, _, err := measureDownload(ctx, t, maxBytes, speedtestProbe)
+		if err == nil && b > bestBytes {
+			best, bestBytes = t, b
+		}
+	}
+	if bestBytes == 0 {
+		return 0, 0, errors.New("all download targets failed (throttled or unreachable)")
+	}
+	return measureDownload(ctx, best, maxBytes, speedtestPhase)
+}
+
+// speedtestUpload sends up to maxBytes of pseudo-random data to url for
 // ~speedtestPhase and returns the bytes actually sent and the elapsed ms.
-func speedtestUpload(ctx context.Context, maxBytes int64) (int64, int64, error) {
+func speedtestUpload(ctx context.Context, url string, maxBytes int64) (int64, int64, error) {
 	block := make([]byte, speedtestUploadBlockLen)
 	rand.New(rand.NewSource(time.Now().UnixNano())).Read(block)
 
@@ -574,7 +661,7 @@ func speedtestUpload(ctx context.Context, maxBytes int64) (int64, int64, error) 
 	}()
 
 	cr := &countReader{r: pr}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, speedtestUploadURL, cr)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, cr)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -585,6 +672,25 @@ func speedtestUpload(ctx context.Context, maxBytes int64) (int64, int64, error) 
 		resp.Body.Close()
 	}
 	return cr.Count(), time.Since(start).Milliseconds(), err
+}
+
+// runSpeedtestUpload tries each upload target until one transfers at least
+// speedtestMinGoodTransfer bytes (Cloudflare throttles datacenter IPs), and
+// falls back to the previous target's partial result otherwise.
+func runSpeedtestUpload(ctx context.Context, maxBytes int64) (int64, int64, error) {
+	var bestBytes int64
+	var bestMs int64
+	var bestErr error
+	for _, url := range speedtestUploadTargets {
+		b, ms, err := speedtestUpload(ctx, url, maxBytes)
+		if b >= speedtestMinGoodTransfer {
+			return b, ms, err
+		}
+		if b > bestBytes || (b == 0 && bestErr == nil) {
+			bestBytes, bestMs, bestErr = b, ms, err
+		}
+	}
+	return bestBytes, bestMs, bestErr
 }
 
 func (s *apiServer) handleSpeedtest(w http.ResponseWriter, r *http.Request) {
@@ -607,11 +713,11 @@ func (s *apiServer) handleSpeedtest(w http.ResponseWriter, r *http.Request) {
 	pingCancel()
 
 	dlCtx, dlCancel := context.WithTimeout(r.Context(), speedtestPhaseTimeout)
-	dlBytes, dlMs, dlErr := speedtestDownload(dlCtx, maxBytes)
+	dlBytes, dlMs, dlErr := runSpeedtestDownload(dlCtx, maxBytes)
 	dlCancel()
 
 	upCtx, upCancel := context.WithTimeout(r.Context(), speedtestPhaseTimeout)
-	upBytes, upMs, upErr := speedtestUpload(upCtx, maxBytes)
+	upBytes, upMs, upErr := runSpeedtestUpload(upCtx, maxBytes)
 	upCancel()
 
 	result := speedtestResult{

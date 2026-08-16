@@ -211,7 +211,7 @@ function buildSpeedtestSection() {
             </div>
             <div class="speedtest-footer">
                 <button id="speedtest-btn" class="speedtest-btn">Iniciar Speed Test</button>
-                <span class="speedtest-status" id="speedtest-status">Mide la velocidad máxima de la conexión del servidor (~10 s)</span>
+                <span class="speedtest-status" id="speedtest-status">Mide la velocidad máxima de la conexión del servidor (~20 s)</span>
             </div>
         </div>
     `;
