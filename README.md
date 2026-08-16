@@ -9,6 +9,7 @@ A lightweight real-time network dashboard using vnStat and Go.
 - **Alert threshold**: highlight an interface in red when combined speed exceeds a configurable limit.
 - **Historical records**: daily, hourly and monthly traffic from vnStat with range tabs (24h / 5d / 7d / 30d / monthly).
 - **Summary cards**: total download/upload right now and for today.
+- **Speed test**: on-demand download/upload/ping test against Cloudflare's public endpoints (≈10 s), showing the server's maximum connection speed.
 - **Chart persistence**: the live chart survives page reloads via `localStorage`.
 - **PWA**: installable with offline cache of the static shell.
 - **Optional basic auth**, security headers, `/healthz` healthcheck, graceful shutdown.
@@ -22,6 +23,7 @@ A lightweight real-time network dashboard using vnStat and Go.
 | `/api/realtime` | Live counters, server-computed speeds and rolling history per interface |
 | `/api/history?range=24h\|5d\|7d\|30d\|month` | vnStat history for the requested range |
 | `/api/summary` | Today's totals and current speeds per interface |
+| `/api/speedtest?mb=200` | On-demand speed test: downloads/uploads up to `mb` MB per phase (~5 s each) against Cloudflare, returning `ping_ms`, `download`/`upload` `bps`. Returns `409` while another test runs |
 | `/api/interfaces` | List of monitored interfaces (alias) |
 
 ## Environment variables

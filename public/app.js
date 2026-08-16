@@ -55,6 +55,7 @@ async function init() {
     config = await res.json();
 
     buildSummarySection();
+    buildSpeedtestSection();
     config.interfaces.forEach(iface => buildInterfaceSections(iface));
     buildRangeTabs();
 
@@ -186,6 +187,72 @@ function buildInterfaceSections(iface) {
             }
         }
     });
+}
+
+function buildSpeedtestSection() {
+    const section = document.createElement('section');
+    section.className = 'dashboard-section';
+    section.innerHTML = `
+        <h2 class="section-main-title">Speed Test</h2>
+        <div class="speedtest-box">
+            <div class="speedtest-metrics">
+                <div class="speedtest-metric">
+                    <div class="stat-label rx">${ICONS.download} Descarga</div>
+                    <div class="speedtest-value rx" id="st-download">—</div>
+                </div>
+                <div class="speedtest-metric">
+                    <div class="stat-label tx">${ICONS.upload} Subida</div>
+                    <div class="speedtest-value tx" id="st-upload">—</div>
+                </div>
+                <div class="speedtest-metric">
+                    <div class="stat-label">Ping</div>
+                    <div class="speedtest-value" id="st-ping">—</div>
+                </div>
+            </div>
+            <div class="speedtest-footer">
+                <button id="speedtest-btn" class="speedtest-btn">Iniciar Speed Test</button>
+                <span class="speedtest-status" id="speedtest-status">Mide la velocidad máxima de la conexión del servidor (~10 s)</span>
+            </div>
+        </div>
+    `;
+    document.querySelector('.dashboard-section').after(section);
+    document.getElementById('speedtest-btn').addEventListener('click', runSpeedtest);
+}
+
+let speedtestRunning = false;
+
+function formatMbps(bps) {
+    if (!bps || bps <= 0) return '—';
+    const mbps = bps / 1e6;
+    return mbps >= 100 ? Math.round(mbps) + ' Mbps' : mbps.toFixed(1) + ' Mbps';
+}
+
+async function runSpeedtest() {
+    if (speedtestRunning) return;
+    speedtestRunning = true;
+    const btn = document.getElementById('speedtest-btn');
+    const status = document.getElementById('speedtest-status');
+    btn.disabled = true;
+    btn.textContent = 'Probando...';
+    status.textContent = 'Midiendo descarga y subida, espera unos segundos...';
+    try {
+        const res = await fetch('/api/speedtest');
+        if (!res.ok) {
+            const data = await res.json().catch(() => ({}));
+            throw new Error(data.error || ('HTTP ' + res.status));
+        }
+        const data = await res.json();
+        document.getElementById('st-download').textContent = formatMbps(data.download.bps);
+        document.getElementById('st-upload').textContent = formatMbps(data.upload.bps);
+        document.getElementById('st-ping').textContent = data.ping_ms >= 0 ? data.ping_ms + ' ms' : '—';
+        status.textContent = 'Completado. Resultados de la conexión del servidor.';
+    } catch (e) {
+        status.textContent = 'Error: ' + e.message;
+    } finally {
+        speedtestRunning = false;
+        btn.disabled = false;
+        btn.textContent = 'Iniciar Speed Test';
+    }
 }
 
 function buildRangeTabs() {

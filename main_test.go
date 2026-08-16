@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"io"
 	"math"
 	"strings"
 	"testing"
@@ -183,5 +185,47 @@ func TestParseBytesMath(t *testing.T) {
 	}
 	if math.Abs(got-1572864) > 0.001 {
 		t.Errorf("expected 1572864, got %v", got)
+	}
+}
+
+func TestSpeedFromTransfer(t *testing.T) {
+	cases := []struct {
+		bytes int64
+		ms    int64
+		want  float64
+	}{
+		{0, 1000, 0},
+		{1000, 0, 0},
+		{1000, 1000, 1000},
+		{5000, 2000, 2500},
+		{1024, 1024, 1000},
+	}
+	for _, c := range cases {
+		if got := speedFromTransfer(c.bytes, c.ms); got != c.want {
+			t.Errorf("speedFromTransfer(%d, %d) = %v, want %v", c.bytes, c.ms, got, c.want)
+		}
+	}
+}
+
+func TestCountReader(t *testing.T) {
+	payload := []byte("hello world")
+	cr := &countReader{r: bytes.NewReader(payload)}
+	buf := make([]byte, 3)
+	var total []byte
+	for {
+		n, err := cr.Read(buf)
+		total = append(total, buf[:n]...)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+	if string(total) != "hello world" {
+		t.Errorf("read %q, want %q", total, payload)
+	}
+	if cr.Count() != int64(len(payload)) {
+		t.Errorf("counted %d bytes, want %d", cr.Count(), len(payload))
 	}
 }

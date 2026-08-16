@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/subtle"
 	"encoding/json"
@@ -9,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"net/http"
 	"os"
 	"os/exec"
@@ -18,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -436,11 +439,204 @@ func todayTotals(data *vnstatRoot, name string, now time.Time) (rx, tx uint64, f
 }
 
 // ---------------------------------------------------------------------------
+// Speed test
+
+const (
+	speedtestDefaultMB      = 200
+	speedtestMinMB          = 1
+	speedtestMaxMB          = 512
+	speedtestPhase          = 5 * time.Second
+	speedtestPhaseTimeout   = 45 * time.Second
+	speedtestPingTimeout    = 5 * time.Second
+	speedtestDownloadURL    = "https://speed.cloudflare.com/__down"
+	speedtestUploadURL      = "https://speed.cloudflare.com/__up"
+	speedtestChunkSize      = 256 * 1024
+	speedtestUploadBlockLen = 4 * 1024 * 1024
+)
+
+type speedtestPart struct {
+	Bps   float64 `json:"bps"` // bytes/sec
+	Bytes int64   `json:"bytes"`
+	Ms    int64   `json:"ms"`
+}
+
+type speedtestResult struct {
+	PingMs    int64         `json:"ping_ms"`
+	Download  speedtestPart `json:"download"`
+	Upload    speedtestPart `json:"upload"`
+	Timestamp int64         `json:"timestamp"`
+}
+
+// countReader counts the bytes read from an underlying reader. The counter is
+// atomic because the HTTP transport may keep reading the body concurrently
+// with the caller inspecting the result.
+type countReader struct {
+	r io.Reader
+	n atomic.Int64
+}
+
+func (c *countReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n.Add(int64(n))
+	return n, err
+}
+
+func (c *countReader) Count() int64 { return c.n.Load() }
+
+// speedFromTransfer converts a transfer (bytes, ms) into bytes/sec.
+func speedFromTransfer(bytes int64, ms int64) float64 {
+	if ms <= 0 || bytes <= 0 {
+		return 0
+	}
+	return float64(bytes) * 1000 / float64(ms)
+}
+
+// speedtestPing measures the round-trip latency to the download endpoint.
+func speedtestPing(ctx context.Context) int64 {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, speedtestDownloadURL+"?bytes=0", nil)
+	if err != nil {
+		return -1
+	}
+	start := time.Now()
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return -1
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	return time.Since(start).Milliseconds()
+}
+
+// speedtestDownload receives up to maxBytes from Cloudflare for ~speedtestPhase
+// and returns the bytes actually received and the elapsed time in ms. On a
+// timeout it returns the partial transfer instead of failing.
+func speedtestDownload(ctx context.Context, maxBytes int64) (int64, int64, error) {
+	url := fmt.Sprintf("%s?bytes=%d", speedtestDownloadURL, maxBytes)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return 0, 0, err
+	}
+	start := time.Now()
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return 0, 0, fmt.Errorf("download endpoint returned %s", resp.Status)
+	}
+	deadline := time.Now().Add(speedtestPhase)
+	buf := make([]byte, speedtestChunkSize)
+	var total int64
+	for {
+		if time.Now().After(deadline) {
+			break
+		}
+		n, err := resp.Body.Read(buf)
+		total += int64(n)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return total, time.Since(start).Milliseconds(), err
+		}
+	}
+	return total, time.Since(start).Milliseconds(), nil
+}
+
+// speedtestUpload sends up to maxBytes of pseudo-random data to Cloudflare for
+// ~speedtestPhase and returns the bytes actually sent and the elapsed ms.
+func speedtestUpload(ctx context.Context, maxBytes int64) (int64, int64, error) {
+	block := make([]byte, speedtestUploadBlockLen)
+	rand.New(rand.NewSource(time.Now().UnixNano())).Read(block)
+
+	pr, pw := io.Pipe()
+	defer pr.Close()
+	go func() {
+		defer pw.Close()
+		deadline := time.Now().Add(speedtestPhase)
+		var sent int64
+		for {
+			if time.Now().After(deadline) || sent >= maxBytes {
+				return
+			}
+			n := len(block)
+			if remaining := maxBytes - sent; remaining < int64(n) {
+				n = int(remaining)
+			}
+			if _, err := pw.Write(block[:n]); err != nil {
+				return
+			}
+			sent += int64(n)
+		}
+	}()
+
+	cr := &countReader{r: pr}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, speedtestUploadURL, cr)
+	if err != nil {
+		return 0, 0, err
+	}
+	start := time.Now()
+	resp, err := http.DefaultClient.Do(req)
+	if err == nil {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+	}
+	return cr.Count(), time.Since(start).Milliseconds(), err
+}
+
+func (s *apiServer) handleSpeedtest(w http.ResponseWriter, r *http.Request) {
+	if !s.speedtestMu.TryLock() {
+		http.Error(w, `{"error": "speed test already running"}`, http.StatusConflict)
+		return
+	}
+	defer s.speedtestMu.Unlock()
+
+	mb := speedtestDefaultMB
+	if v := r.URL.Query().Get("mb"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= speedtestMinMB && n <= speedtestMaxMB {
+			mb = n
+		}
+	}
+	maxBytes := int64(mb) * 1024 * 1024
+
+	pingCtx, pingCancel := context.WithTimeout(r.Context(), speedtestPingTimeout)
+	pingMs := speedtestPing(pingCtx)
+	pingCancel()
+
+	dlCtx, dlCancel := context.WithTimeout(r.Context(), speedtestPhaseTimeout)
+	dlBytes, dlMs, dlErr := speedtestDownload(dlCtx, maxBytes)
+	dlCancel()
+
+	upCtx, upCancel := context.WithTimeout(r.Context(), speedtestPhaseTimeout)
+	upBytes, upMs, upErr := speedtestUpload(upCtx, maxBytes)
+	upCancel()
+
+	result := speedtestResult{
+		PingMs:    pingMs,
+		Download:  speedtestPart{Bytes: dlBytes, Ms: dlMs, Bps: speedFromTransfer(dlBytes, dlMs)},
+		Upload:    speedtestPart{Bytes: upBytes, Ms: upMs, Bps: speedFromTransfer(upBytes, upMs)},
+		Timestamp: time.Now().UnixMilli(),
+	}
+
+	if dlErr != nil && dlBytes == 0 {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "download failed: " + dlErr.Error()})
+		return
+	}
+	if upErr != nil && upBytes == 0 {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "upload failed: " + upErr.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+// ---------------------------------------------------------------------------
 // HTTP
 
 type apiServer struct {
-	cfg     Config
-	monitor *Monitor
+	cfg         Config
+	monitor     *Monitor
+	speedtestMu sync.Mutex
 }
 
 func (s *apiServer) routes() http.Handler {
@@ -455,6 +651,7 @@ func (s *apiServer) routes() http.Handler {
 	mux.HandleFunc("/api/realtime", s.handleRealtime)
 	mux.HandleFunc("/api/history", s.handleHistory)
 	mux.HandleFunc("/api/summary", s.handleSummary)
+	mux.HandleFunc("/api/speedtest", s.handleSpeedtest)
 
 	fs := http.FileServer(http.Dir("./public"))
 	mux.Handle("/", fs)
